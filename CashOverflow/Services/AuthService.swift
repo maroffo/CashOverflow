@@ -26,16 +26,16 @@ final class AuthService {
             displayName: displayName,
             createdAt: Date()
         )
-        try await db.collection("users").document(result.user.uid).setData(Firestore.Encoder().encode(user))
 
-        // Create a default wallet for the new user
         let wallet = Wallet(name: "Il mio portafoglio", ownerId: result.user.uid)
-        let walletRef = try await db.collection("wallets").addDocument(data: Firestore.Encoder().encode(wallet))
+        let userRef = db.collection("users").document(result.user.uid)
+        let walletRef = db.collection("wallets").document()
 
-        // Set the default wallet as active
-        try await db.collection("users").document(result.user.uid).updateData([
-            "activeWalletId": walletRef.documentID
-        ])
+        let batch = db.batch()
+        batch.setData(try Firestore.Encoder().encode(user), forDocument: userRef)
+        batch.setData(try Firestore.Encoder().encode(wallet), forDocument: walletRef)
+        batch.updateData(["activeWalletId": walletRef.documentID], forDocument: userRef)
+        try await batch.commit()
 
         return user
     }

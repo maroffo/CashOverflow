@@ -25,12 +25,8 @@ final class WalletViewModel: ObservableObject {
         isLoading = false
     }
 
-    func loadWallet(id: String) async {
-        do {
-            currentWallet = try await walletService.fetchWallet(id: id)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    func setActiveWallet(id: String) {
+        currentWallet = wallets.first { $0.id == id }
     }
 
     func createWallet(name: String, currency: String = "EUR", ownerId: String) async {

@@ -1,3 +1,6 @@
+// ABOUTME: Scans receipt images using Gemini 2.0 Flash with structured JSON output.
+// ABOUTME: Returns parsed ScannedReceipt for user confirmation before saving as Expense.
+
 import Foundation
 import UIKit
 import GoogleGenerativeAI
@@ -19,7 +22,15 @@ final class ReceiptScannerService {
     private init() {}
 
     func configure(apiKey: String) {
-        model = GenerativeModel(name: "gemini-2.0-flash", apiKey: apiKey)
+        let config = GenerationConfig(
+            responseMIMEType: "application/json",
+            responseSchema: Self.receiptSchema
+        )
+        model = GenerativeModel(
+            name: "gemini-2.0-flash",
+            apiKey: apiKey,
+            generationConfig: config
+        )
     }
 
     func scanReceipt(image: UIImage) async throws -> ScannedReceipt {
@@ -27,90 +38,109 @@ final class ReceiptScannerService {
             throw ReceiptScannerError.notConfigured
         }
 
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            throw ReceiptScannerError.invalidImage
-        }
-
         let prompt = """
-        Analizza questa foto di uno scontrino/ricevuta e rispondi SOLO con un JSON valido (senza markdown, senza ```).
-        Estrai queste informazioni:
-
-        {
-            "merchant": "nome del negozio/esercente",
-            "date": "data in formato YYYY-MM-DD (o null se non leggibile)",
-            "total_amount": 0.00,
-            "items": [
-                {
-                    "name": "nome articolo",
-                    "quantity": 1,
-                    "unit_price": 0.00,
-                    "total_price": 0.00
-                }
-            ],
-            "category": "una tra: groceries, dining, transport, utilities, entertainment, health, shopping, education, housing, insurance, subscriptions, personal, travel, gifts, other",
-            "raw_text": "testo completo leggibile dallo scontrino"
-        }
-
+        Analizza questa foto di uno scontrino/ricevuta.
+        Estrai le informazioni richieste dallo schema JSON.
         Se un campo non è leggibile, usa un valore di default ragionevole.
         L'importo totale deve corrispondere alla somma degli articoli dove possibile.
+        La categoria deve essere una tra: groceries, dining, transport, utilities, entertainment, health, shopping, education, housing, insurance, subscriptions, personal, travel, gifts, other.
         """
 
-        let response = try await model.generateContent(prompt, imageData)
+        let response = try await model.generateContent(prompt, image)
 
-        guard let text = response.text else {
+        guard let text = response.text, let data = text.data(using: .utf8) else {
             throw ReceiptScannerError.emptyResponse
         }
 
-        return try parseResponse(text)
+        let decoded = try JSONDecoder().decode(GeminiReceiptResponse.self, from: data)
+        return decoded.toScannedReceipt()
     }
 
-    private func parseResponse(_ text: String) throws -> ScannedReceipt {
-        // Clean potential markdown wrapping
-        let cleaned = text
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    // MARK: - Schema
 
-        guard let data = cleaned.data(using: .utf8) else {
-            throw ReceiptScannerError.parseError
-        }
+    private static let receiptSchema = Schema(
+        type: .object,
+        properties: [
+            "merchant": Schema(type: .string, description: "Nome del negozio/esercente"),
+            "date": Schema(type: .string, description: "Data in formato YYYY-MM-DD, null se non leggibile", nullable: true),
+            "total_amount": Schema(type: .number, format: "double", description: "Importo totale"),
+            "items": Schema(
+                type: .array,
+                items: Schema(
+                    type: .object,
+                    properties: [
+                        "name": Schema(type: .string, description: "Nome articolo"),
+                        "quantity": Schema(type: .integer, description: "Quantità"),
+                        "unit_price": Schema(type: .number, format: "double", description: "Prezzo unitario"),
+                        "total_price": Schema(type: .number, format: "double", description: "Prezzo totale riga")
+                    ],
+                    requiredProperties: ["name", "quantity", "unit_price", "total_price"]
+                )
+            ),
+            "category": Schema(type: .string, description: "Categoria della spesa"),
+            "raw_text": Schema(type: .string, description: "Testo completo leggibile dallo scontrino")
+        ],
+        requiredProperties: ["merchant", "total_amount", "items", "category", "raw_text"]
+    )
+}
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ReceiptScannerError.parseError
-        }
+// MARK: - Codable Response
 
-        let merchant = json["merchant"] as? String ?? "Sconosciuto"
-        let totalAmount = json["total_amount"] as? Double ?? 0.0
-        let rawText = json["raw_text"] as? String ?? ""
-        let categoryStr = json["category"] as? String ?? "other"
-        let category = ExpenseCategory(rawValue: categoryStr) ?? .other
+private struct GeminiReceiptResponse: Decodable {
+    let merchant: String
+    let date: String?
+    let totalAmount: Double
+    let items: [GeminiReceiptItem]
+    let category: String
+    let rawText: String
 
-        var date: Date?
-        if let dateStr = json["date"] as? String {
+    enum CodingKeys: String, CodingKey {
+        case merchant
+        case date
+        case totalAmount = "total_amount"
+        case items
+        case category
+        case rawText = "raw_text"
+    }
+
+    func toScannedReceipt() -> ScannedReceipt {
+        var parsedDate: Date?
+        if let date = date {
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd"
-            date = formatter.date(from: dateStr)
-        }
-
-        var items: [ReceiptItem] = []
-        if let jsonItems = json["items"] as? [[String: Any]] {
-            items = jsonItems.map { item in
-                ReceiptItem(
-                    name: item["name"] as? String ?? "",
-                    quantity: item["quantity"] as? Int ?? 1,
-                    unitPrice: item["unit_price"] as? Double ?? 0,
-                    totalPrice: item["total_price"] as? Double
-                )
-            }
+            parsedDate = formatter.date(from: date)
         }
 
         return ScannedReceipt(
             merchant: merchant,
-            date: date,
+            date: parsedDate,
             totalAmount: totalAmount,
-            items: items,
-            suggestedCategory: category,
+            items: items.map { $0.toReceiptItem() },
+            suggestedCategory: ExpenseCategory(rawValue: category) ?? .other,
             rawText: rawText
+        )
+    }
+}
+
+private struct GeminiReceiptItem: Decodable {
+    let name: String
+    let quantity: Int
+    let unitPrice: Double
+    let totalPrice: Double
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case quantity
+        case unitPrice = "unit_price"
+        case totalPrice = "total_price"
+    }
+
+    func toReceiptItem() -> ReceiptItem {
+        ReceiptItem(
+            name: name,
+            quantity: quantity,
+            unitPrice: unitPrice,
+            totalPrice: totalPrice
         )
     }
 }

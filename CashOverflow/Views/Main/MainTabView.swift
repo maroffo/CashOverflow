@@ -36,7 +36,7 @@ struct MainTabView: View {
             if let userId = authViewModel.currentUser?.id {
                 await walletViewModel.loadWallets(userId: userId)
                 if let activeWalletId = authViewModel.currentUser?.activeWalletId {
-                    await walletViewModel.loadWallet(id: activeWalletId)
+                    walletViewModel.setActiveWallet(id: activeWalletId)
                 }
                 expenseListViewModel.walletId = walletViewModel.currentWallet?.id
             }

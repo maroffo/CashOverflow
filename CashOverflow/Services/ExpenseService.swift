@@ -51,9 +51,15 @@ final class ExpenseService {
         return snapshot.documents.compactMap { try? $0.data(as: Expense.self) }
     }
 
-    func listenToExpenses(walletId: String, onChange: @escaping ([Expense]) -> Void) -> ListenerRegistration {
-        db.collection("wallets").document(walletId)
+    func listenToExpenses(walletId: String, month: Date, onChange: @escaping ([Expense]) -> Void) -> ListenerRegistration {
+        let calendar = Calendar.current
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: month))!
+        let end = calendar.date(byAdding: .month, value: 1, to: start)!
+
+        return db.collection("wallets").document(walletId)
             .collection("expenses")
+            .whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
+            .whereField("date", isLessThan: Timestamp(date: end))
             .order(by: "date", descending: true)
             .addSnapshotListener { snapshot, _ in
                 let expenses = snapshot?.documents.compactMap { try? $0.data(as: Expense.self) } ?? []
