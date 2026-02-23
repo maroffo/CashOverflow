@@ -62,15 +62,16 @@ final class WalletService {
     func acceptInvite(_ invite: WalletInvite, userId: String) async throws {
         guard let inviteId = invite.id else { return }
 
-        // Update invite status
-        try await db.collection("invites").document(inviteId).updateData([
-            "status": WalletInvite.InviteStatus.accepted.rawValue
-        ])
-
-        // Add user to wallet members
-        try await db.collection("wallets").document(invite.walletId).updateData([
-            "memberIds": FieldValue.arrayUnion([userId])
-        ])
+        let batch = db.batch()
+        batch.updateData(
+            ["status": WalletInvite.InviteStatus.accepted.rawValue],
+            forDocument: db.collection("invites").document(inviteId)
+        )
+        batch.updateData(
+            ["memberIds": FieldValue.arrayUnion([userId])],
+            forDocument: db.collection("wallets").document(invite.walletId)
+        )
+        try await batch.commit()
     }
 
     func declineInvite(_ invite: WalletInvite) async throws {

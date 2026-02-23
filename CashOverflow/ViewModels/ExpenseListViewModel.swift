@@ -36,14 +36,7 @@ final class ExpenseListViewModel: ObservableObject {
 
     func loadExpenses() async {
         guard let walletId = walletId else { return }
-        isLoading = true
-        do {
-            expenses = try await expenseService.fetchExpenses(walletId: walletId, month: selectedMonth)
-            updateTotals()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
+        startListening(walletId: walletId)
     }
 
     func deleteExpense(_ expense: Expense) async {
@@ -59,17 +52,21 @@ final class ExpenseListViewModel: ObservableObject {
 
     func previousMonth() {
         selectedMonth = Calendar.current.date(byAdding: .month, value: -1, to: selectedMonth) ?? selectedMonth
-        Task { await loadExpenses() }
+        if let walletId = walletId {
+            startListening(walletId: walletId)
+        }
     }
 
     func nextMonth() {
         selectedMonth = Calendar.current.date(byAdding: .month, value: 1, to: selectedMonth) ?? selectedMonth
-        Task { await loadExpenses() }
+        if let walletId = walletId {
+            startListening(walletId: walletId)
+        }
     }
 
     private func startListening(walletId: String) {
         listener?.remove()
-        listener = expenseService.listenToExpenses(walletId: walletId) { [weak self] expenses in
+        listener = expenseService.listenToExpenses(walletId: walletId, month: selectedMonth) { [weak self] expenses in
             Task { @MainActor in
                 self?.expenses = expenses
                 self?.updateTotals()

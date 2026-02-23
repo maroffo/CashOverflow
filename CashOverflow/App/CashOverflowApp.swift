@@ -7,6 +7,10 @@ struct CashOverflowApp: App {
 
     init() {
         FirebaseApp.configure()
+
+        if let key = KeychainService.shared.get(key: "geminiApiKey"), !key.isEmpty {
+            ReceiptScannerService.shared.configure(apiKey: key)
+        }
     }
 
     var body: some Scene {

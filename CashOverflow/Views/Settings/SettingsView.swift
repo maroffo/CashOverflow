@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
-    @AppStorage("geminiApiKey") private var geminiApiKey = ""
+    @State private var geminiApiKey: String = KeychainService.shared.get(key: "geminiApiKey") ?? ""
     @State private var showApiKeyField = false
     @State private var tempApiKey = ""
     @State private var showLogoutConfirm = false
@@ -76,12 +76,24 @@ struct SettingsView: View {
                 SecureField("API Key", text: $tempApiKey)
                 Button("Salva") {
                     geminiApiKey = tempApiKey
+                    KeychainService.shared.save(key: "geminiApiKey", value: geminiApiKey)
                     ReceiptScannerService.shared.configure(apiKey: geminiApiKey)
                     tempApiKey = ""
                 }
                 Button("Annulla", role: .cancel) { tempApiKey = "" }
             } message: {
                 Text("Inserisci la tua API Key di Google Gemini. La puoi ottenere su aistudio.google.com.")
+            }
+            .onAppear {
+                // Migrate API key from UserDefaults to Keychain
+                if geminiApiKey.isEmpty,
+                   let legacy = UserDefaults.standard.string(forKey: "geminiApiKey"),
+                   !legacy.isEmpty {
+                    KeychainService.shared.save(key: "geminiApiKey", value: legacy)
+                    geminiApiKey = legacy
+                    ReceiptScannerService.shared.configure(apiKey: legacy)
+                    UserDefaults.standard.removeObject(forKey: "geminiApiKey")
+                }
             }
             .confirmationDialog("Vuoi uscire?", isPresented: $showLogoutConfirm) {
                 Button("Esci", role: .destructive) {
